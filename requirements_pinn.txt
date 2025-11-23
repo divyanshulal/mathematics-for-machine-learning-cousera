@@ -1,0 +1,18 @@
+# Requirements for Slope Stability PINN
+
+# Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Scientific Computing
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Optional: For better performance
+# CUDA toolkit (install separately for GPU support)
+
+# Optional: For advanced sampling methods
+# pyDOE>=0.3.8  # Latin Hypercube Sampling (alternative to scipy.stats.qmc)
