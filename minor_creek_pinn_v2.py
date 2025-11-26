@@ -321,18 +321,18 @@ class LandslidePINN(nn.Module):
         self.P = PhysicalConstants
         self.pw_net = PorePressureNet(hidden_units, hidden_layers)
 
-        # FIX: Initialize parameters closer to targets
-        # phi: target 18.9, init at 19.0
-        self.log_phi = nn.Parameter(torch.tensor(np.log(19.0), device=device))
+        # FIX: Initialize for softplus parameterization
+        # phi = 10 + softplus(x), want phi ≈ 19 → softplus(x) ≈ 9 → x ≈ 9
+        self.log_phi = nn.Parameter(torch.tensor(9.0, device=device))
 
-        # mu: target 2.1e-8, init at 5e-8 (same order of magnitude)
+        # mu = exp(x), want mu ≈ 5e-8 → x = log(5e-8) ≈ -16.8
         self.log_mu = nn.Parameter(torch.tensor(np.log(5e-8), device=device))
 
-        # alpha: target 8.0, init at 5.0 (closer to target!)
-        self.log_alpha = nn.Parameter(torch.tensor(np.log(5.0), device=device))
+        # alpha = softplus(x) + 0.1, want alpha ≈ 5 → softplus(x) ≈ 4.9 → x ≈ 4.9
+        self.log_alpha = nn.Parameter(torch.tensor(4.9, device=device))
 
-        # pw_baseline: target 16.6, init at 16.0
-        self.log_pw_baseline = nn.Parameter(torch.tensor(np.log(16.0), device=device))
+        # pw_baseline = softplus(x) + 5, want pw ≈ 16 → softplus(x) ≈ 11 → x ≈ 11
+        self.log_pw_baseline = nn.Parameter(torch.tensor(11.0, device=device))
 
         # Hydraulic parameters
         self.log_ks = nn.Parameter(torch.tensor(np.log(1e-5), device=device))
@@ -343,21 +343,25 @@ class LandslidePINN(nn.Module):
         print(f"  Physics parameters: phi, mu, alpha, pw_baseline (4 learnable)")
 
     def get_params(self):
-        """Get physics parameters with soft bounds"""
-        # Friction angle: 10 to 35 degrees
-        phi = 10.0 + 25.0 * torch.sigmoid(self.log_phi - np.log(19.0))
+        """
+        Get physics parameters with SOFT bounds using softplus.
+        CRITICAL FIX: Avoid torch.clamp which blocks gradients!
+        Use softplus for soft lower bounds: softplus(x) = log(1 + exp(x))
+        """
+        # Friction angle: use softplus to keep > 10, scale to reasonable range
+        # phi = 10 + softplus(log_phi) keeps phi > 10 with smooth gradients
+        phi_raw = torch.nn.functional.softplus(self.log_phi)
+        phi = 10.0 + phi_raw  # phi > 10 always, smooth gradients
 
-        # Viscosity: 1e-10 to 1e-5 (kPa*s)^-1
+        # Viscosity: direct exp (no clamping!)
+        # Values are naturally bounded by exp() being positive
         mu = torch.exp(self.log_mu)
-        mu = torch.clamp(mu, 1e-10, 1e-5)
 
-        # Alpha: 0.5 to 50 [1/kPa] - FIX: raised lower bound
-        alpha = torch.exp(self.log_alpha)
-        alpha = torch.clamp(alpha, 0.5, 50.0)
+        # Alpha: use softplus to ensure > 0, add small offset
+        alpha = torch.nn.functional.softplus(self.log_alpha) + 0.1
 
-        # Baseline pore pressure: 5 to 50 kPa
-        pw_baseline = torch.exp(self.log_pw_baseline)
-        pw_baseline = torch.clamp(pw_baseline, 5.0, 50.0)
+        # Baseline pore pressure: softplus + offset
+        pw_baseline = torch.nn.functional.softplus(self.log_pw_baseline) + 5.0
 
         ks = torch.exp(self.log_ks)
         Ss = torch.exp(self.log_Ss)
@@ -514,14 +518,17 @@ def train_pinn(epochs=15000, lr_net=1e-3, lr_params=1e-2, print_every=500):
         u_pred_normalized = u_pred / u_scale
         loss_u = torch.mean((u_pred_normalized - u_obs) ** 2)
 
-        # Curriculum learning
-        if epoch < 2000:
-            w_pw, w_u = 1.0, 0.1
-        elif epoch < 8000:
-            progress = (epoch - 2000) / 6000
-            w_pw, w_u = 1.0, 0.1 + progress * 4.9
+        # Curriculum learning - FIX: Start with higher displacement weight!
+        if epoch < 1000:
+            # Phase 1: Both losses active from start
+            w_pw, w_u = 1.0, 1.0
+        elif epoch < 5000:
+            # Phase 2: Gradually increase displacement weight
+            progress = (epoch - 1000) / 4000
+            w_pw, w_u = 1.0, 1.0 + progress * 9.0  # 1.0 → 10.0
         else:
-            w_pw, w_u = 1.0, 5.0
+            # Phase 3: Strong displacement emphasis
+            w_pw, w_u = 1.0, 10.0
 
         loss = w_pw * loss_pw + w_u * loss_u
 
@@ -844,8 +851,8 @@ if __name__ == "__main__":
     model, history, data, params_init, params_final = train_pinn(
         epochs=15000,
         lr_net=1e-3,
-        lr_params=5e-2,
-        print_every=1000
+        lr_params=1e-1,  # Increased for faster physics param evolution
+        print_every=500  # More frequent updates
     )
 
     print("\nCreating figure...")
