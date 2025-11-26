@@ -472,9 +472,9 @@ def train_pinn(epochs=15000, lr_net=1e-3, lr_params=1e-2, print_every=500):
 
     # FIX: Lower patience for faster adaptation
     scheduler_net = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        opt_net, mode='min', factor=0.5, patience=500, verbose=False)
+        opt_net, mode='min', factor=0.5, patience=500)
     scheduler_phys = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        opt_phys, mode='min', factor=0.5, patience=500, verbose=False)
+        opt_phys, mode='min', factor=0.5, patience=500)
 
     pw_scale = PhysicalConstants.p_ref
     u_scale = PhysicalConstants.u_ref
